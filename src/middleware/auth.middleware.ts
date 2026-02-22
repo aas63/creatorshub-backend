@@ -1,3 +1,4 @@
+// src/middleware/auth.middleware.ts
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 
@@ -12,7 +13,7 @@ export function requireAuth(
 ) {
   const header = req.headers.authorization;
 
-  if (!header) {
+  if (!header || !header.startsWith("Bearer ")) {
     return res.status(401).json({ error: "NO_AUTH_HEADER" });
   }
 

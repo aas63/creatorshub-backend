@@ -1,48 +1,84 @@
-import jwt from "jsonwebtoken";
 import { Request, Response } from "express";
 import { signAccessToken, signRefreshToken } from "../utils/jwt";
+import bcrypt from "bcrypt";
+import { pool } from "../db";
+import jwt from "jsonwebtoken";
 
+// REGISTER
 export const register = async (req: Request, res: Response) => {
   const { email, password, username, displayName } = req.body;
 
-  // TEMP USER (DB comes later)
-  const user = {
-    id: "uuid-placeholder",
-    username,
-    displayName,
-    bio: null,
-    profileImageUrl: null
-  };
+  try {
+    const existing = await pool.query(
+      "SELECT * FROM users WHERE email = $1 OR username = $2",
+      [email, username]
+    );
 
-  const accessToken = signAccessToken({ userId: user.id });
-  const refreshToken = signRefreshToken({ userId: user.id });
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ error: "EMAIL_OR_USERNAME_TAKEN" });
+    }
 
-  return res.status(201).json({
-    user,
-    accessToken,
-    refreshToken
-  });
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const result = await pool.query(
+      `INSERT INTO users (email, password_hash, username, display_name)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, username, display_name, bio, profile_image_url`,
+      [email, passwordHash, username, displayName]
+    );
+
+    const user = result.rows[0];
+
+    const accessToken = signAccessToken({ userId: user.id });
+    const refreshToken = signRefreshToken({ userId: user.id });
+
+    return res.status(201).json({ user, accessToken, refreshToken });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "SERVER_ERROR" });
+  }
 };
 
-export const login = async (_req: Request, res: Response) => {
-  const user = {
-    id: "uuid-placeholder",
-    username: "demo",
-    displayName: "Demo User",
-    bio: null,
-    profileImageUrl: null
-  };
+// LOGIN
+export const login = async (req: Request, res: Response) => {
+  const { email, password } = req.body;
 
-  const accessToken = signAccessToken({ userId: user.id });
-  const refreshToken = signRefreshToken({ userId: user.id });
+  try {
+    const result = await pool.query(
+      "SELECT * FROM users WHERE email = $1",
+      [email]
+    );
 
-  return res.json({
-    user,
-    accessToken,
-    refreshToken
-  });
+    if (result.rows.length === 0)
+      return res.status(401).json({ error: "INVALID_CREDENTIALS" });
+
+    const user = result.rows[0];
+
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match)
+      return res.status(401).json({ error: "INVALID_CREDENTIALS" });
+
+    const accessToken = signAccessToken({ userId: user.id });
+    const refreshToken = signRefreshToken({ userId: user.id });
+
+    return res.json({
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.display_name,
+        bio: user.bio,
+        profileImageUrl: user.profile_image_url,
+      },
+      accessToken,
+      refreshToken,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "SERVER_ERROR" });
+  }
 };
 
+// REFRESH TOKEN
 export const refresh = async (req: Request, res: Response) => {
   const { refreshToken } = req.body;
 
@@ -51,7 +87,10 @@ export const refresh = async (req: Request, res: Response) => {
   }
 
   try {
-    const payload = jwt.verify(refreshToken, process.env.JWT_SECRET!) as any;
+    const payload = jwt.verify(
+      refreshToken,
+      process.env.JWT_SECRET!
+    ) as any;
 
     const accessToken = signAccessToken({ userId: payload.userId });
 
