@@ -3,6 +3,10 @@ import { signAccessToken, signRefreshToken } from "../utils/jwt";
 import bcrypt from "bcrypt";
 import { pool } from "../db";
 import jwt from "jsonwebtoken";
+import { sendVerificationEmail } from "../utils/mailer";
+
+const VERIFICATION_TTL_MINUTES =
+  Number(process.env.VERIFICATION_CODE_TTL_MINUTES) || 10;
 
 // REGISTER
 export const register = async (req: Request, res: Response) => {
@@ -21,18 +25,38 @@ export const register = async (req: Request, res: Response) => {
     const passwordHash = await bcrypt.hash(password, 10);
 
     const result = await pool.query(
-      `INSERT INTO users (email, password_hash, username, display_name)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, username, display_name, bio, profile_image_url`,
+      `INSERT INTO users (email, password_hash, username, display_name, is_verified)
+       VALUES ($1, $2, $3, $4, false)
+       RETURNING id`,
       [email, passwordHash, username, displayName]
     );
 
     const user = result.rows[0];
+    const verificationCode = generateVerificationCode();
+    const expiresAt = new Date(Date.now() + VERIFICATION_TTL_MINUTES * 60 * 1000);
 
-    const accessToken = signAccessToken({ userId: user.id });
-    const refreshToken = signRefreshToken({ userId: user.id });
+    await pool.query(
+      `INSERT INTO verification_codes (user_id, code, expires_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id)
+       DO UPDATE SET code = EXCLUDED.code, expires_at = EXCLUDED.expires_at`,
+      [user.id, verificationCode, expiresAt]
+    );
 
-    return res.status(201).json({ user, accessToken, refreshToken });
+    try {
+      await sendVerificationEmail(email, verificationCode);
+    } catch (emailErr) {
+      console.error("Failed to send verification email", emailErr);
+      return res
+        .status(500)
+        .json({ error: "FAILED_TO_SEND_VERIFICATION_EMAIL" });
+    }
+
+    return res.status(201).json({
+      message: "VERIFICATION_REQUIRED",
+      userId: user.id,
+      expiresAt,
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "SERVER_ERROR" });
@@ -58,17 +82,17 @@ export const login = async (req: Request, res: Response) => {
     if (!match)
       return res.status(401).json({ error: "INVALID_CREDENTIALS" });
 
+    if (!user.is_verified) {
+      return res
+        .status(403)
+        .json({ error: "EMAIL_NOT_VERIFIED", userId: user.id });
+    }
+
     const accessToken = signAccessToken({ userId: user.id });
     const refreshToken = signRefreshToken({ userId: user.id });
 
     return res.json({
-      user: {
-        id: user.id,
-        username: user.username,
-        displayName: user.display_name,
-        bio: user.bio,
-        profileImageUrl: user.profile_image_url,
-      },
+      user: mapUserRow(user),
       accessToken,
       refreshToken,
     });
@@ -99,3 +123,76 @@ export const refresh = async (req: Request, res: Response) => {
     return res.status(401).json({ error: "INVALID_REFRESH_TOKEN" });
   }
 };
+
+// VERIFY ACCOUNT
+export const verifyAccount = async (req: Request, res: Response) => {
+  const { userId, code } = req.body as { userId?: string; code?: string };
+
+  if (!userId || !code) {
+    return res.status(400).json({ error: "USER_ID_AND_CODE_REQUIRED" });
+  }
+
+  try {
+    const verification = await pool.query(
+      `SELECT code, expires_at FROM verification_codes WHERE user_id = $1`,
+      [userId]
+    );
+
+    if (verification.rows.length === 0) {
+      return res.status(400).json({ error: "NO_VERIFICATION_REQUEST" });
+    }
+
+    const record = verification.rows[0];
+    const expiresAt = new Date(record.expires_at);
+
+    if (record.code !== code) {
+      return res.status(400).json({ error: "INVALID_CODE" });
+    }
+
+    if (expiresAt.getTime() < Date.now()) {
+      return res.status(400).json({ error: "CODE_EXPIRED" });
+    }
+
+    await pool.query(`UPDATE users SET is_verified = true WHERE id = $1`, [
+      userId,
+    ]);
+    await pool.query(`DELETE FROM verification_codes WHERE user_id = $1`, [
+      userId,
+    ]);
+
+    const userResult = await pool.query(
+      `SELECT id, username, display_name, bio, profile_image_url
+       FROM users WHERE id = $1`,
+      [userId]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: "USER_NOT_FOUND" });
+    }
+
+    const user = userResult.rows[0];
+
+    const accessToken = signAccessToken({ userId });
+    const refreshToken = signRefreshToken({ userId });
+
+    return res.json({
+      user: mapUserRow(user),
+      accessToken,
+      refreshToken,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "SERVER_ERROR" });
+  }
+};
+
+const mapUserRow = (user: any) => ({
+  id: user.id,
+  username: user.username,
+  displayName: user.display_name,
+  bio: user.bio,
+  profileImageUrl: user.profile_image_url,
+});
+
+const generateVerificationCode = () =>
+  Math.floor(100000 + Math.random() * 900000).toString();
