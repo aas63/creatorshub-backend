@@ -1,0 +1,25 @@
+BEGIN;
+
+ALTER TABLE tracks
+    ADD COLUMN IF NOT EXISTS caption VARCHAR(150),
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+CREATE TABLE IF NOT EXISTS likes (
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    track_id UUID NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, track_id)
+);
+
+CREATE TABLE IF NOT EXISTS comments (
+    id UUID PRIMARY KEY,
+    track_id UUID NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    text VARCHAR(500) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_comments_track ON comments(track_id);
+CREATE INDEX IF NOT EXISTS idx_tracks_created_at ON tracks(created_at DESC);
+
+COMMIT;

@@ -3,7 +3,15 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import { requireAuth } from "../middleware/auth.middleware";
-import { uploadTrack } from "../controllers/tracks.controller";
+import {
+  uploadTrack,
+  getFeed,
+  getTrackDetail,
+  likeTrack,
+  unlikeTrack,
+  addComment,
+  listComments,
+} from "../controllers/tracks.controller";
 
 const router = Router();
 const uploadsDir = path.resolve(process.cwd(), "uploads");
@@ -38,5 +46,12 @@ router.post(
   ]),
   uploadTrack
 );
+
+router.get("/", requireAuth, getFeed);
+router.get("/:trackId", requireAuth, getTrackDetail);
+router.get("/:trackId/comments", requireAuth, listComments);
+router.post("/:trackId/like", requireAuth, likeTrack);
+router.delete("/:trackId/like", requireAuth, unlikeTrack);
+router.post("/:trackId/comments", requireAuth, addComment);
 
 export default router;
