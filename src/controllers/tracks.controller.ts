@@ -337,6 +337,44 @@ export const listComments = async (req: Request, res: Response) => {
   }
 };
 
+const toIsoString = (value: any): string | null => {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toISOString();
+};
+
+const toBoolean = (value: any): boolean => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "t" || normalized === "true" || normalized === "1";
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  return Boolean(value);
+};
+
+const safeDisplayName = (raw: any, fallback: string) => {
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    return raw;
+  }
+  return fallback;
+};
+
 const mapTrackRow = (row: any) => ({
   trackId: row.id,
   userId: row.user_id,
@@ -345,14 +383,14 @@ const mapTrackRow = (row: any) => ({
   caption: row.caption,
   fileUrl: row.file_url,
   coverImageUrl: row.cover_image_url,
-  createdAt: row.created_at,
+  createdAt: toIsoString(row.created_at),
   likesCount: Number(row.likes_count) || 0,
   commentsCount: Number(row.comments_count) || 0,
-  likedByMe: row.liked_by_me ?? false,
+  likedByMe: toBoolean(row.liked_by_me),
   user: {
     id: row.user_id,
     username: row.username,
-    displayName: row.display_name,
+    displayName: safeDisplayName(row.display_name, row.username ?? "Creator"),
   },
 });
 
@@ -360,10 +398,10 @@ const mapCommentRow = (row: any) => ({
   id: row.id,
   trackId: row.track_id,
   text: row.text,
-  createdAt: row.created_at,
+  createdAt: toIsoString(row.created_at),
   user: {
     id: row.user_id,
     username: row.username,
-    displayName: row.display_name,
+    displayName: safeDisplayName(row.display_name, row.username ?? "Creator"),
   },
 });
