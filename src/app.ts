@@ -18,4 +18,11 @@ app.use("/auth", authRoutes);
 app.use("/users", userRoutes);
 app.use("/tracks", tracksRoutes);
 
+app.get("/", (_req, res) => {
+  res.json({
+    status: "ok",
+    message: "CreatorsHub API is running",
+  });
+});
+
 export default app;
