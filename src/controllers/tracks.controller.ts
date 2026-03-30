@@ -1,11 +1,10 @@
 import path from "path";
-import fs from "fs/promises";
 import { Response, Request } from "express";
 import { randomUUID } from "crypto";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { pool } from "../db";
+import { supabase, audioBucket, imageBucket } from "../utils/supabase";
 
-const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
 const FEED_LIMIT = Number(process.env.FEED_LIMIT) || 50;
 const MAX_CAPTION_LENGTH = 150;
 const MAX_COMMENT_LENGTH = 500;
@@ -38,25 +37,17 @@ export const uploadTrack = async (req: UploadRequest, res: Response) => {
     return res.status(400).json({ error: "FILE_AND_TITLE_REQUIRED" });
   }
 
-  try {
-    await fs.mkdir(UPLOADS_DIR, { recursive: true });
+  if (!supabase) {
+    return res.status(500).json({ error: "STORAGE_NOT_CONFIGURED" });
+  }
 
-    const relativePath = path.relative(
-      process.cwd(),
-      audioFile.path ?? path.join(UPLOADS_DIR, audioFile.filename)
-    );
-    const publicUrl = `/${relativePath.split(path.sep).join("/")}`;
+  try {
+    const audioUpload = await uploadToSupabase(audioBucket, audioFile, userId, "tracks");
     let coverImageUrl: string | null = null;
 
     if (coverImageFile) {
-      const coverRelative = path
-        .relative(
-          process.cwd(),
-          coverImageFile.path ?? path.join(UPLOADS_DIR, coverImageFile.filename)
-        )
-        .split(path.sep)
-        .join("/");
-      coverImageUrl = `/${coverRelative}`;
+      const coverUpload = await uploadToSupabase(imageBucket, coverImageFile, userId, "covers");
+      coverImageUrl = coverUpload.publicUrl;
     }
 
     const sanitizedCaption = (caption || "").trim().slice(0, MAX_CAPTION_LENGTH) || null;
@@ -67,7 +58,7 @@ export const uploadTrack = async (req: UploadRequest, res: Response) => {
       title,
       description: description || null,
       caption: sanitizedCaption,
-      fileUrl: publicUrl,
+      fileUrl: audioUpload.publicUrl,
       coverImageUrl,
       createdAt: new Date().toISOString(),
       likesCount: 0,
@@ -405,3 +396,30 @@ const mapCommentRow = (row: any) => ({
     displayName: safeDisplayName(row.display_name, row.username ?? "Creator"),
   },
 });
+
+const uploadToSupabase = async (
+  bucket: string,
+  file: Express.Multer.File,
+  userId: string,
+  folder: string
+) => {
+  if (!supabase) {
+    throw new Error("Supabase client not configured");
+  }
+
+  const extension = path.extname(file.originalname) || "";
+  const safeFolder = folder.replace(/[^a-zA-Z0-9/_-]/g, "");
+  const filename = `${safeFolder}/${userId}/${Date.now()}-${randomUUID()}${extension}`;
+
+  const { error } = await supabase.storage.from(bucket).upload(filename, file.buffer, {
+    contentType: file.mimetype,
+    upsert: false,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const { data } = supabase.storage.from(bucket).getPublicUrl(filename);
+  return { path: filename, publicUrl: data.publicUrl };
+};
